@@ -1,0 +1,201 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const path = require('path');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const secret = "Deepak@2023";
+
+const app = express();
+const PORT = 3000;
+
+// MongoDB Connection
+mongoose.connect("mongodb://127.0.0.1:27017/sensorDataDB")
+    .then(() => console.log("MongoDB Connected"))
+    .catch((err) => console.log("Mongo Error", err));
+
+app.set("view engine", "ejs");
+app.set('views', path.resolve("./views"));
+
+// Middleware for parsing application/json and application/x-www-form-urlencoded
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+app.use(cookieParser());
+
+// Sensor Data Schema
+const sensorDataSchema = new mongoose.Schema({
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: true,
+        ref: 'User'
+    },
+    temperature: {
+        type: Number,
+        required: true,
+    },
+    humidity: {
+        type: Number,
+        required: true,
+    }
+}, {
+    timestamps: true // Adds createdAt and updatedAt timestamps
+});
+
+// Sensor Data Model
+const SensorData = mongoose.model("SensorData", sensorDataSchema);
+
+// User Schema
+const userSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true,
+    },
+    email: {
+        type: String,
+        required: true,
+        unique: true
+    },
+    password: {
+        type: String,
+        required: true
+    },
+}, {
+    timestamps: true // Adds createdAt and updatedAt timestamps
+});
+
+// User Model
+const User = mongoose.model("User", userSchema);
+
+// Helper functions for JWT handling
+function setUser(user) {
+    return jwt.sign(
+        {
+            _id: user._id,
+            email: user.email,
+        }, secret
+    );
+};
+
+function getUser(token) {
+    if (!token) return null;
+    try {
+        return jwt.verify(token, secret);
+    } catch (error) {
+        return null;
+    }
+}
+
+//middleWare
+async function restrictToLoggedinUserOnly(req, res, next) {
+    const userUid = req.cookies?.uid;
+    if (!userUid) return res.redirect("/login");
+    const user = getUser(userUid);
+    if (!user) return res.redirect("/login");
+    req.user = user;
+    next();
+}
+
+async function checkAuth(req, res, next) {
+    const userUid = req.cookies?.uid;
+    const user = getUser(userUid);
+    req.user = user;
+    next();
+}
+
+
+// Adjusted POST route for sensor data to include userId in the URL
+app.post('/api/sensor-data/:userId', async (req, res) => {
+    try {
+        // Extracting userId from URL parameters
+        const { userId } = req.params;
+        const { temperature, humidity } = req.body;
+
+        // Check if the user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // Creating a new sensor data entry associated with the user
+        const newSensorData = await SensorData.create({ userId, temperature, humidity });
+        console.log("New sensor data saved for user:", userId);
+        res.status(201).json({ message: "Sensor data saved successfully" });
+    } catch (error) {
+        console.error("Failed to save sensor data for user:", error);
+        res.status(500).json({ error: "Failed to save sensor data" });
+    }
+});
+
+
+// GET route to fetch the latest sensor data
+app.get('/api/sensor-data/:userId', async (req, res) => {
+    try {
+        // Extracting userId from URL parameters
+        const { userId } = req.params;
+
+        // Fetching sensor data for the given userId
+        const userSensorData = await SensorData.find({ userId }).sort({ createdAt: -1 });
+        res.status(200).json(userSensorData);
+    } catch (error) {
+        console.error("Failed to retrieve sensor data:", error);
+        res.status(500).json({ error: "Failed to retrieve sensor data" });
+    }
+});
+
+
+// Adjusted GET route to display sensor data on the webpage for the logged-in user
+app.get('/sensor-data', restrictToLoggedinUserOnly, async (req, res) => {
+    const sensorData = await SensorData.find({ userId: req.user._id });
+    res.render("home", { sensorData }); // Assumes a "dashboard.ejs" template
+  });
+
+
+// Signup Route - Render Signup Page
+app.get('/signup', (req, res) => {
+    res.render("signup");
+});
+
+// Handle Signup Form Submission
+app.post('/signup', async (req, res) => {
+    try {
+      const { name, email, password } = req.body;
+      const hashedPassword = await bcrypt.hash(password, 10);
+      await User.create({ name, email, password: hashedPassword });
+      res.redirect("/login");
+    } catch (error) {
+      res.status(500).send(error.message);
+    }
+  });
+
+
+
+// Login Route - Render Login Page
+app.get('/login', (req, res) => {
+    res.render("login");
+});
+
+// Handle Login Form Submission
+app.post('/login', async (req, res) => {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (user && await bcrypt.compare(password, user.password)) {
+      const token = setUser(user);
+      res.cookie("uid", token, { httpOnly: true }); // Securely set the token in cookies
+      res.redirect("/sensor-data");
+    } else {
+      res.render("login", { error: "Invalid Email or Password" });
+    }
+  });
+
+  app.get('/', checkAuth, (req, res) => {
+    if (req.user) {
+      res.redirect('/sensor-data');
+    } else {
+      res.render("login");
+    }
+  });
+
+
+
+// Start the server
+app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
