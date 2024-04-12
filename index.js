@@ -192,6 +192,20 @@ app.post('/sensor-datas/:userId', async (req, res) => {
     }
 });
 
+// Define the route for POST request
+app.post('/sensor-datas', (req, res) => {
+    const { temperature, humidity } = req.body;
+    
+    // Log the received data (just for demonstration)
+    console.log(`Received: Temperature = ${temperature}, Humidity = ${humidity}`);
+
+    // Respond to the client
+    res.status(201).json({
+        message: "Data received successfully11111",
+        data: req.body
+    });
+});
+
 
 // GET route to fetch the latest sensor data
 // app.get('/api/sensor-data/:userId', async (req, res) => {
